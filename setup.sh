@@ -38,7 +38,15 @@ show_configuration() {
     
     # Check if shadowsocks-libev is installed and running
     if command -v ss-server >/dev/null 2>&1 && [ -f /etc/shadowsocks-libev/config.json ]; then
-        SS_PASSWORD=$(grep -o '"password":"[^"]*' /etc/shadowsocks-libev/config.json | cut -d'"' -f4)
+        SS_PASSWORD=$(python3 -c "
+import json
+try:
+    with open('/etc/shadowsocks-libev/config.json', 'r') as f:
+        config = json.load(f)
+    print(config.get('password', ''))
+except:
+    print('')
+")
         
         # Check if shadow-tls is installed
         if [ -f /usr/local/bin/shadow-tls ] && [ -f /etc/systemd/system/shadow-tls.service ]; then
@@ -352,6 +360,15 @@ if [ "$SS_INSTALLED" = false ] || [ "$REINSTALL_SS" = true ]; then
         systemctl disable shadowsocks-libev 2>/dev/null || true
         apt remove -y shadowsocks-libev > /dev/null 2>&1
         apt autoremove -y > /dev/null 2>&1
+        
+        # Remove configuration files
+        if [ -d /etc/shadowsocks-libev ]; then
+            print_warning "删除现有配置文件..."
+            rm -rf /etc/shadowsocks-libev/
+        fi
+        
+        # Clean up any systemd files
+        systemctl daemon-reload
     fi
     
     print_success "安装 shadowsocks-libev..."
@@ -386,8 +403,21 @@ fi
 
 # Read shadowsocks password
 if [ -f /etc/shadowsocks-libev/config.json ]; then
-    SS_PASSWORD=$(grep -o '"password":"[^"]*' /etc/shadowsocks-libev/config.json | cut -d'"' -f4)
-    print_success "读取到 shadowsocks 密码"
+    SS_PASSWORD=$(python3 -c "
+import json
+try:
+    with open('/etc/shadowsocks-libev/config.json', 'r') as f:
+        config = json.load(f)
+    print(config.get('password', ''))
+except:
+    print('')
+")
+    if [ -n "$SS_PASSWORD" ]; then
+        print_success "读取到 shadowsocks 密码"
+    else
+        print_error "无法读取 shadowsocks 密码"
+        exit 1
+    fi
 else
     print_error "错误: shadowsocks-libev 配置文件不存在"
     exit 1
@@ -420,6 +450,15 @@ if [ "$OPERATION_MODE" = "install-ss-with-tls" ]; then
             print_warning "停止现有 shadow-tls 服务..."
             systemctl stop shadow-tls
             sleep 2
+        fi
+        
+        # If reinstalling, clean up existing files
+        if [ "$REINSTALL_SHADOW_TLS" = true ]; then
+            print_warning "清理现有 shadow-tls 文件..."
+            systemctl disable shadow-tls 2>/dev/null || true
+            rm -f /etc/systemd/system/shadow-tls.service
+            rm -f /usr/local/bin/shadow-tls
+            systemctl daemon-reload
         fi
 
         # Download shadow-tls binary
