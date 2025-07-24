@@ -5,14 +5,14 @@
 
 set -e
 
-echo -e "\033[1;34m=== Shadowsocks 安装脚本 ===\033[0m"
-echo ""
+printf "\033[1;34m=== Shadowsocks 安装脚本 ===\033[0m\n"
+printf "\n"
 
 # Function to print colored text
-print_info() { echo -e "\033[1;34m$1\033[0m"; }
-print_success() { echo -e "\033[1;32m$1\033[0m"; }
-print_warning() { echo -e "\033[1;33m$1\033[0m"; }
-print_error() { echo -e "\033[1;31m$1\033[0m"; }
+print_info() { printf "\033[1;34m%s\033[0m\n" "$1"; }
+print_success() { printf "\033[1;32m%s\033[0m\n" "$1"; }
+print_warning() { printf "\033[1;33m%s\033[0m\n" "$1"; }
+print_error() { printf "\033[1;31m%s\033[0m\n" "$1"; }
 
 # Function to ask yes/no question
 ask_yes_no() {
@@ -27,22 +27,86 @@ ask_yes_no() {
 }
 
 # Check if running as root
-if [ "$EUID" -ne 0 ]; then
+if [ "$(id -u)" -ne 0 ]; then
     print_error "请使用 root 权限运行此脚本"
     exit 1
 fi
 
+# Function to display configuration
+show_configuration() {
+    print_info "=== 当前配置信息 ==="
+    
+    # Check if shadowsocks-libev is installed and running
+    if command -v ss-server >/dev/null 2>&1 && [ -f /etc/shadowsocks-libev/config.json ]; then
+        SS_PASSWORD=$(grep -o '"password":"[^"]*' /etc/shadowsocks-libev/config.json | cut -d'"' -f4)
+        
+        # Check if shadow-tls is installed
+        if [ -f /usr/local/bin/shadow-tls ] && [ -f /etc/systemd/system/shadow-tls.service ]; then
+            SHADOW_TLS_PASSWORD=$(grep -o 'password [^[:space:]]*' /etc/systemd/system/shadow-tls.service | cut -d' ' -f2 2>/dev/null || echo "未找到密码")
+            
+            print_success "检测到 Shadowsocks + Shadow-TLS 配置"
+            print_warning "Shadowsocks 服务运行在端口 8388"
+            print_warning "Shadow-TLS 服务运行在端口 443"
+        else
+            print_success "检测到 Shadowsocks 单独配置"
+            print_warning "Shadowsocks 服务运行在端口 8388"
+        fi
+        
+        # Get public IP addresses
+        print_info "获取公网 IP 地址..."
+        PUBLIC_IPV4=$(curl -4 -s --connect-timeout 10 ifconfig.me 2>/dev/null || echo "Not available")
+        PUBLIC_IPV6=$(curl -6 -s --connect-timeout 10 ifconfig.me 2>/dev/null || echo "Not available")
+        
+        printf "\n"
+        print_info "=== 配置信息 ==="
+        
+        if [ -f /usr/local/bin/shadow-tls ] && [ -f /etc/systemd/system/shadow-tls.service ]; then
+            # Shadow-TLS configuration
+            if [ "$PUBLIC_IPV4" != "Not available" ]; then
+                printf "\033[1;36mSS-IPv4 = ss, %s, 443, encrypt-method=aes-128-gcm, password=%s, tfo=true, udp-relay=true, shadow-tls-password=\"%s\", shadow-tls-sni=gateway.icloud.com, shadow-tls-version=3\033[0m\n" "$PUBLIC_IPV4" "$SS_PASSWORD" "$SHADOW_TLS_PASSWORD"
+            fi
+            
+            if [ "$PUBLIC_IPV6" != "Not available" ]; then
+                printf "\033[1;36mSS-IPv6 = ss, %s, 443, encrypt-method=aes-128-gcm, password=%s, tfo=true, udp-relay=true, shadow-tls-password=\"%s\", shadow-tls-sni=gateway.icloud.com, shadow-tls-version=3\033[0m\n" "$PUBLIC_IPV6" "$SS_PASSWORD" "$SHADOW_TLS_PASSWORD"
+            fi
+        else
+            # Shadowsocks only configuration
+            if [ "$PUBLIC_IPV4" != "Not available" ]; then
+                printf "\033[1;36mSS-IPv4 = ss, %s, 8388, encrypt-method=aes-128-gcm, password=%s, tfo=true, udp-relay=true\033[0m\n" "$PUBLIC_IPV4" "$SS_PASSWORD"
+            fi
+            
+            if [ "$PUBLIC_IPV6" != "Not available" ]; then
+                printf "\033[1;36mSS-IPv6 = ss, %s, 8388, encrypt-method=aes-128-gcm, password=%s, tfo=true, udp-relay=true\033[0m\n" "$PUBLIC_IPV6" "$SS_PASSWORD"
+            fi
+        fi
+        
+        printf "\n"
+        print_info "服务状态:"
+        echo "Shadowsocks-libev:"
+        systemctl status shadowsocks-libev --no-pager -l | head -3
+        
+        if [ -f /usr/local/bin/shadow-tls ] && [ -f /etc/systemd/system/shadow-tls.service ]; then
+            echo "Shadow-TLS:"
+            systemctl status shadow-tls --no-pager -l | head -3
+        fi
+        
+    else
+        print_warning "未检测到 Shadowsocks-libev 配置"
+    fi
+}
+
 # Main menu selection
-echo -e "\033[1;36m请选择操作:\033[0m"
+printf "\033[1;36m请选择操作:\033[0m\n"
 echo "1) 仅安装 shadowsocks-libev"
 echo "2) 安装 shadowsocks-libev + shadow-tls"
 echo "3) 卸载 shadowsocks-libev"
 echo "4) 卸载 shadowsocks-libev + shadow-tls"
 echo "5) 完全卸载所有组件"
+echo "6) 查看当前配置"
 echo "0) 退出"
-echo ""
+printf "\n"
 while true; do
-    read -p "请输入选择 (0-5): " choice
+    read -p "请输入选择 (0-6): " choice
     case $choice in
         0)
             print_info "退出脚本"
@@ -73,13 +137,18 @@ while true; do
             print_info "选择操作: 完全卸载所有组件"
             break
             ;;
+        6)
+            show_configuration
+            printf "\n"
+            continue
+            ;;
         *)
-            echo "请输入 0-5 中的数字"
+            echo "请输入 0-6 中的数字"
             ;;
     esac
 done
 
-echo ""
+printf "\n"
 
 # Function to uninstall shadowsocks-libev
 uninstall_shadowsocks() {
@@ -207,7 +276,7 @@ if [ "$OPERATION_MODE" = "uninstall-all" ]; then
         exit 0
     fi
 
-    echo -e "\033[1;31m警告: 这将完全卸载所有 shadowsocks 和 shadow-tls 组件！\033[0m"
+    printf "\033[1;31m警告: 这将完全卸载所有 shadowsocks 和 shadow-tls 组件！\033[0m\n"
     if ask_yes_no "确认要完全卸载所有组件吗？"; then
         if [ "$FOUND_TLS" = true ]; then
             uninstall_shadow_tls
@@ -247,7 +316,7 @@ fi
 # Handle existing shadowsocks-libev installation
 REINSTALL_SS=false
 if [ "$SS_INSTALLED" = true ]; then
-    echo ""
+    printf "\n"
     if ask_yes_no "是否重新安装 shadowsocks-libev？"; then
         REINSTALL_SS=true
         print_info "将重新安装 shadowsocks-libev"
@@ -259,7 +328,7 @@ fi
 # Handle existing shadow-tls installation (if needed)
 REINSTALL_SHADOW_TLS=false
 if [ "$OPERATION_MODE" = "install-ss-with-tls" ] && [ "$SHADOW_TLS_INSTALLED" = true ]; then
-    echo ""
+    printf "\n"
     if ask_yes_no "是否重新安装 shadow-tls？"; then
         REINSTALL_SHADOW_TLS=true
         print_info "将重新安装 shadow-tls"
@@ -268,7 +337,7 @@ if [ "$OPERATION_MODE" = "install-ss-with-tls" ] && [ "$SHADOW_TLS_INSTALLED" = 
     fi
 fi
 
-echo ""
+printf "\n"
 print_info "开始安装..."
 
 # Update system
@@ -277,25 +346,39 @@ apt update > /dev/null 2>&1
 
 # Install or configure shadowsocks-libev
 if [ "$SS_INSTALLED" = false ] || [ "$REINSTALL_SS" = true ]; then
+    if [ "$REINSTALL_SS" = true ]; then
+        print_info "重新安装 shadowsocks-libev - 先卸载现有版本..."
+        systemctl stop shadowsocks-libev 2>/dev/null || true
+        systemctl disable shadowsocks-libev 2>/dev/null || true
+        apt remove -y shadowsocks-libev > /dev/null 2>&1
+        apt autoremove -y > /dev/null 2>&1
+    fi
+    
     print_success "安装 shadowsocks-libev..."
     apt install -y shadowsocks-libev openssl curl > /dev/null 2>&1
 
-    # Generate random password if new installation
-    if [ ! -f /etc/shadowsocks-libev/config.json ] || [ "$REINSTALL_SS" = true ]; then
-        SS_PASSWORD=$(openssl rand -base64 16)
-        print_warning "生成新的 shadowsocks 密码: $SS_PASSWORD"
-
-        # Create shadowsocks configuration
-        cat > /etc/shadowsocks-libev/config.json << EOF
-{
-    "server":["::1", "127.0.0.1"],
-    "server_port":8388,
-    "method":"aes-128-gcm",
-    "password":"$SS_PASSWORD",
-    "timeout":300,
-    "fast_open":true
-}
-EOF
+    # Modify existing configuration file
+    if [ -f /etc/shadowsocks-libev/config.json ]; then
+        print_info "修改现有配置文件..."
+        
+        # Use python to properly modify JSON to avoid formatting issues
+        python3 -c "
+import json
+try:
+    with open('/etc/shadowsocks-libev/config.json', 'r') as f:
+        config = json.load(f)
+    config['method'] = 'aes-128-gcm'
+    config['fast_open'] = True
+    with open('/etc/shadowsocks-libev/config.json', 'w') as f:
+        json.dump(config, f, indent=4)
+    print('配置文件更新成功')
+except Exception as e:
+    print(f'配置文件更新失败: {e}')
+    exit(1)
+"
+    else
+        print_error "错误: shadowsocks-libev 配置文件不存在"
+        exit 1
     fi
 else
     print_info "使用现有 shadowsocks-libev 安装"
@@ -304,9 +387,7 @@ fi
 # Read shadowsocks password
 if [ -f /etc/shadowsocks-libev/config.json ]; then
     SS_PASSWORD=$(grep -o '"password":"[^"]*' /etc/shadowsocks-libev/config.json | cut -d'"' -f4)
-    # Ensure method is aes-128-gcm
-    sed -i 's/"method":"[^"]*"/"method":"aes-128-gcm"/' /etc/shadowsocks-libev/config.json
-    print_success "已确保加密方法为 aes-128-gcm"
+    print_success "读取到 shadowsocks 密码"
 else
     print_error "错误: shadowsocks-libev 配置文件不存在"
     exit 1
@@ -421,38 +502,38 @@ PUBLIC_IPV4=$(curl -4 -s --connect-timeout 10 ifconfig.me 2>/dev/null || echo "N
 PUBLIC_IPV6=$(curl -6 -s --connect-timeout 10 ifconfig.me 2>/dev/null || echo "Not available")
 
 # Display results
-echo ""
+printf "\n"
 print_success "=== 安装完成 ==="
 
 if [ "$OPERATION_MODE" = "install-ss-only" ]; then
     print_warning "Shadowsocks 服务运行在端口 8388"
-    echo ""
+    printf "\n"
     print_info "=== 配置信息 ==="
 
     if [ "$PUBLIC_IPV4" != "Not available" ]; then
-        echo -e "\033[1;36mSS-IPv4 = ss, $PUBLIC_IPV4, 8388, encrypt-method=aes-128-gcm, password=$SS_PASSWORD, tfo=true, udp-relay=true\033[0m"
+        printf "\033[1;36mSS-IPv4 = ss, %s, 8388, encrypt-method=aes-128-gcm, password=%s, tfo=true, udp-relay=true\033[0m\n" "$PUBLIC_IPV4" "$SS_PASSWORD"
     fi
 
     if [ "$PUBLIC_IPV6" != "Not available" ]; then
-        echo -e "\033[1;36mSS-IPv6 = ss, $PUBLIC_IPV6, 8388, encrypt-method=aes-128-gcm, password=$SS_PASSWORD, tfo=true, udp-relay=true\033[0m"
+        printf "\033[1;36mSS-IPv6 = ss, %s, 8388, encrypt-method=aes-128-gcm, password=%s, tfo=true, udp-relay=true\033[0m\n" "$PUBLIC_IPV6" "$SS_PASSWORD"
     fi
 
 elif [ "$OPERATION_MODE" = "install-ss-with-tls" ]; then
     print_warning "Shadowsocks 服务运行在端口 8388"
     print_warning "Shadow-TLS 服务运行在端口 443"
-    echo ""
+    printf "\n"
     print_info "=== 配置信息 ==="
 
     if [ "$PUBLIC_IPV4" != "Not available" ]; then
-        echo -e "\033[1;36mSS-IPv4 = ss, $PUBLIC_IPV4, 443, encrypt-method=aes-128-gcm, password=$SS_PASSWORD, tfo=true, udp-relay=true, shadow-tls-password=\"$SHADOW_TLS_PASSWORD\", shadow-tls-sni=gateway.icloud.com, shadow-tls-version=3\033[0m"
+        printf "\033[1;36mSS-IPv4 = ss, %s, 443, encrypt-method=aes-128-gcm, password=%s, tfo=true, udp-relay=true, shadow-tls-password=\"%s\", shadow-tls-sni=gateway.icloud.com, shadow-tls-version=3\033[0m\n" "$PUBLIC_IPV4" "$SS_PASSWORD" "$SHADOW_TLS_PASSWORD"
     fi
 
     if [ "$PUBLIC_IPV6" != "Not available" ]; then
-        echo -e "\033[1;36mSS-IPv6 = ss, $PUBLIC_IPV6, 443, encrypt-method=aes-128-gcm, password=$SS_PASSWORD, tfo=true, udp-relay=true, shadow-tls-password=\"$SHADOW_TLS_PASSWORD\", shadow-tls-sni=gateway.icloud.com, shadow-tls-version=3\033[0m"
+        printf "\033[1;36mSS-IPv6 = ss, %s, 443, encrypt-method=aes-128-gcm, password=%s, tfo=true, udp-relay=true, shadow-tls-password=\"%s\", shadow-tls-sni=gateway.icloud.com, shadow-tls-version=3\033[0m\n" "$PUBLIC_IPV6" "$SS_PASSWORD" "$SHADOW_TLS_PASSWORD"
     fi
 fi
 
-echo ""
+printf "\n"
 print_info "服务状态:"
 echo "Shadowsocks-libev:"
 systemctl status shadowsocks-libev --no-pager -l | head -3
@@ -462,5 +543,5 @@ if [ "$OPERATION_MODE" = "install-ss-with-tls" ]; then
     systemctl status shadow-tls --no-pager -l | head -3
 fi
 
-echo ""
+printf "\n"
 print_success "安装脚本执行完毕！"
